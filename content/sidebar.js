@@ -21,7 +21,7 @@
 }
 #pc-root.visible { transform: translateX(0); }
 
-#pc-root * { margin: 0; padding: 0; box-sizing: border-box; }
+:where(#pc-root) * { margin: 0; padding: 0; box-sizing: border-box; }
 
 /* Toggle tab */
 #pc-tab {
