@@ -3,21 +3,25 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 let cachedPageContent = null;
 
 chrome.action.onClicked.addListener(async (tab) => {
-  await chrome.sidePanel.open({ windowId: tab.windowId });
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
+  } catch {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content/content.js', 'content/sidebar.js']
+    });
+    setTimeout(async () => {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
+      } catch (e2) {}
+    }, 300);
+  }
 });
 
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  cachedPageContent = null;
-  try {
-    const tab = await chrome.tabs.get(activeInfo.tabId);
-    const response = await getPageContent(activeInfo.tabId);
-    if (response) {
-      chrome.runtime.sendMessage({
-        type: 'PAGE_CONTENT_UPDATED',
-        data: response
-      }).catch(() => {});
-    }
-  } catch (e) {}
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading') {
+    cachedPageContent = null;
+  }
 });
 
 async function getPageContent(tabId) {
@@ -30,32 +34,30 @@ async function getPageContent(tabId) {
       cachedPageContent = { tabId, data: response };
       return response;
     }
-  } catch (e) {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const tab = tabs[0];
-    if (!tab) throw e;
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => {
-          const title = document.title || '';
-          const url = location.href;
-          let mainContent = '';
-          const sel = document.querySelector('article,[role="main"],main,.article,.post');
-          if (sel) mainContent = sel.textContent.replace(/\s+/g, ' ').trim();
-          else mainContent = document.body.textContent.replace(/\s+/g, ' ').trim();
-          if (mainContent.length > 15000) mainContent = mainContent.substring(0, 15000) + '...';
-          return { title, url, content: mainContent };
-        }
-      });
-      if (results?.[0]?.result) {
-        cachedPageContent = { tabId: tab.id, data: results[0].result };
-        return results[0].result;
+  } catch (e) { }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) return { title: '', url: '', content: '' };
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const title = document.title || '';
+        const url = location.href;
+        let mainContent = '';
+        const sel = document.querySelector('article,[role="main"],main,.article,.post');
+        if (sel) mainContent = sel.textContent.replace(/\s+/g, ' ').trim();
+        else mainContent = document.body.textContent.replace(/\s+/g, ' ').trim();
+        if (mainContent.length > 15000) mainContent = mainContent.substring(0, 15000) + '...';
+        return { title, url, content: mainContent };
       }
-    } catch (err2) {
-      throw err2;
+    });
+    if (results?.[0]?.result) {
+      cachedPageContent = { tabId: tab.id, data: results[0].result };
+      return results[0].result;
     }
-  }
+  } catch (err2) { }
   return { title: '', url: '', content: '' };
 }
 
@@ -68,17 +70,12 @@ async function callOpenRouter(apiKey, model, messages) {
       'HTTP-Referer': chrome.runtime.id,
       'X-Title': 'PageChat AI'
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.7,
-      max_tokens: 4096
-    })
+    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
   });
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `API error: ${response.status} ${response.statusText}`);
+    throw new Error(err.error?.message || `API error: ${response.status}`);
   }
 
   return response.json();
