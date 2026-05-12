@@ -2,6 +2,24 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 let cachedPageContent = null;
 
+chrome.action.onClicked.addListener(async (tab) => {
+  await chrome.sidePanel.open({ windowId: tab.windowId });
+});
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  cachedPageContent = null;
+  try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    const response = await getPageContent(activeInfo.tabId);
+    if (response) {
+      chrome.runtime.sendMessage({
+        type: 'PAGE_CONTENT_UPDATED',
+        data: response
+      }).catch(() => {});
+    }
+  } catch (e) {}
+});
+
 async function getPageContent(tabId) {
   if (cachedPageContent && cachedPageContent.tabId === tabId) {
     return cachedPageContent.data;
@@ -13,7 +31,8 @@ async function getPageContent(tabId) {
       return response;
     }
   } catch (e) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
     if (!tab) throw e;
     try {
       const results = await chrome.scripting.executeScript({
@@ -30,7 +49,7 @@ async function getPageContent(tabId) {
         }
       });
       if (results?.[0]?.result) {
-        cachedPageContent = { tabId, data: results[0].result };
+        cachedPageContent = { tabId: tab.id, data: results[0].result };
         return results[0].result;
       }
     } catch (err2) {

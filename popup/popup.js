@@ -52,6 +52,20 @@
   let isSettingsView = false;
   let isProcessing = false;
 
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'PAGE_CONTENT_UPDATED' && msg.data) {
+      pageContent = msg.data;
+      pageTitle.textContent = msg.data.title || 'Page loaded';
+    }
+  });
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'PAGE_CONTENT_UPDATED' && msg.data) {
+      pageContent = msg.data;
+      pageTitle.textContent = msg.data.title || 'Page loaded';
+    }
+  });
+
   async function init() {
     const settings = await chrome.storage.local.get(['apiKey', 'model', 'customModel']);
     if (settings.apiKey) apiKeyInput.value = settings.apiKey;
