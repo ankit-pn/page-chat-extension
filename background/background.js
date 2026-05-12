@@ -1,4 +1,5 @@
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 
 let cachedPageContent = null;
 
@@ -6,28 +7,24 @@ chrome.action.onClicked.addListener(async (tab) => {
   try {
     await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
   } catch {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['content/content.js', 'content/sidebar.js']
-    });
-    setTimeout(async () => {
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
-      } catch (e2) {}
-    }, 300);
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content/content.js', 'content/sidebar.js']
+      });
+      setTimeout(async () => {
+        try { await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' }); } catch (e2) {}
+      }, 300);
+    } catch (e1) {}
   }
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'loading') {
-    cachedPageContent = null;
-  }
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') cachedPageContent = null;
 });
 
 async function getPageContent(tabId) {
-  if (cachedPageContent && cachedPageContent.tabId === tabId) {
-    return cachedPageContent.data;
-  }
+  if (cachedPageContent && cachedPageContent.tabId === tabId) return cachedPageContent.data;
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PAGE_CONTENT' });
     if (response && response.content) {
@@ -81,6 +78,24 @@ async function callOpenRouter(apiKey, model, messages) {
   return response.json();
 }
 
+async function fetchOpenRouterModels(apiKey) {
+  const response = await fetch(OPENROUTER_MODELS_URL, {
+    headers: { 'Authorization': `Bearer ${apiKey}` }
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Failed to fetch models: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return (data.data || []).map(m => ({
+    id: m.id,
+    name: m.name || m.id,
+    provider: m.id.includes('/') ? m.id.split('/')[0] : 'openrouter'
+  }));
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GET_PAGE_CONTENT') {
     getPageContent(msg.tabId).then(sendResponse).catch(e => sendResponse({ error: e.message }));
@@ -93,6 +108,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const { apiKey, model, messages } = msg;
         const result = await callOpenRouter(apiKey, model, messages);
         sendResponse({ success: true, data: result });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === 'FETCH_MODELS') {
+    (async () => {
+      try {
+        const { apiKey } = msg;
+        const models = await fetchOpenRouterModels(apiKey);
+        sendResponse({ success: true, data: models });
       } catch (e) {
         sendResponse({ success: false, error: e.message });
       }
