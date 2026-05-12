@@ -357,20 +357,28 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           </div>
           <h1>Setup</h1>
-          <p>Enter your OpenRouter API key to start chatting with any webpage.</p>
+          <p>Choose a provider and enter your API key to start chatting with any webpage.</p>
         </div>
 
         <div id="pc-setup-err" class="pc-msg-error" style="display:none"></div>
 
         <div class="pc-field">
-          <label class="pc-field-lbl">OpenRouter API Key</label>
+          <label class="pc-field-lbl">Provider</label>
+          <select id="pc-provider">
+            <option value="openrouter">OpenRouter</option>
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </div>
+
+        <div class="pc-field">
+          <label class="pc-field-lbl" id="pc-key-label">OpenRouter API Key</label>
           <div style="position:relative">
             <input type="password" id="pc-key" class="pc-field-inp" placeholder="sk-or-v1-..." autocomplete="off">
             <button id="pc-eye" class="pc-field-eye" title="Show key">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
-          <div class="pc-field-hint">
+          <div class="pc-field-hint" id="pc-key-hint">
             Get your key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys ↗</a>
           </div>
         </div>
@@ -435,7 +443,10 @@
     welcome: document.getElementById('pc-welcome'),
     inp: document.getElementById('pc-inp'),
     send: document.getElementById('pc-send'),
+    provider: document.getElementById('pc-provider'),
     key: document.getElementById('pc-key'),
+    keyLabel: document.getElementById('pc-key-label'),
+    keyHint: document.getElementById('pc-key-hint'),
     model: document.getElementById('pc-model'),
     modelWrap: document.getElementById('pc-model-wrap'),
     modelSpin: document.getElementById('pc-model-spin'),
@@ -524,11 +535,11 @@
   }
 
   // ── Model loading ───────────────────────────────────
-  async function fetchModels(apiKey) {
+  async function fetchModels(provider, apiKey) {
     E.modelWrap.style.display = 'block';
     E.modelSpin.style.display = 'flex';
     try {
-      const res = await chrome.runtime.sendMessage({ type: 'FETCH_MODELS', apiKey });
+      const res = await chrome.runtime.sendMessage({ type: 'FETCH_MODELS', provider, apiKey });
       E.modelSpin.style.display = 'none';
       if (!res.success || !res.data?.length) {
         E.model.innerHTML = '<option value="">No models found</option>';
@@ -563,10 +574,13 @@
 
   // ── Init ────────────────────────────────────────────
   async function init() {
-    const { pc_api_key, pc_model } = await chrome.storage.local.get(['pc_api_key', 'pc_model']);
+    const { pc_provider, pc_api_key, pc_model } = await chrome.storage.local.get(['pc_provider', 'pc_api_key', 'pc_model']);
+    const provider = pc_provider || 'openrouter';
+    E.provider.value = provider;
+    updateProviderUI(provider);
     if (pc_api_key) {
       E.key.value = pc_api_key;
-      await fetchModels(pc_api_key);
+      await fetchModels(provider, pc_api_key);
       const short = pc_model ? (pc_model.includes('/') ? pc_model.split('/').slice(1).join('/') : pc_model) : '';
       E.hdrModel.textContent = short || 'Model saved';
       showChat();
@@ -576,23 +590,42 @@
     refreshCtx();
   }
 
+  // ── Provider UI ─────────────────────────────────────
+  function updateProviderUI(provider) {
+    if (provider === 'deepseek') {
+      E.keyLabel.textContent = 'DeepSeek API Key';
+      E.keyHint.innerHTML = 'Get your key from <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com/api_keys ↗</a>';
+      E.key.placeholder = 'sk-...';
+    } else {
+      E.keyLabel.textContent = 'OpenRouter API Key';
+      E.keyHint.innerHTML = 'Get your key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys ↗</a>';
+      E.key.placeholder = 'sk-or-v1-...';
+    }
+    E.key.value = '';
+    E.model.innerHTML = '<option value="">Enter API key to load models</option>';
+    E.modelWrap.style.display = 'none';
+  }
+
+  E.provider.addEventListener('change', () => { updateProviderUI(E.provider.value); });
+
   // ── Event handlers ──────────────────────────────────
   E.eye.addEventListener('click', () => { E.key.type = E.key.type === 'password' ? 'text' : 'password'; });
   E.btnSettings.addEventListener('click', () => { showSetup(); });
   E.btnClose.addEventListener('click', closeSidebar);
 
   E.save.addEventListener('click', async () => {
+    const provider = E.provider.value;
     const key = E.key.value.trim();
     if (!key) {
       E.setupErr.style.display = 'block';
-      E.setupErr.textContent = 'Please enter your OpenRouter API key.';
+      E.setupErr.textContent = 'Please enter your API key.';
       return;
     }
     E.setupErr.style.display = 'none';
     E.save.disabled = true;
     E.save.innerHTML = '<div class="pc-spin"></div> Saving...';
-    await chrome.storage.local.set({ pc_api_key: key });
-    await fetchModels(key);
+    await chrome.storage.local.set({ pc_provider: provider, pc_api_key: key });
+    await fetchModels(provider, key);
     const model = E.model.value;
     await chrome.storage.local.set({ pc_model: model });
     const short = model ? (model.includes('/') ? model.split('/').slice(1).join('/') : model) : '';
@@ -605,9 +638,10 @@
 
   E.key.addEventListener('input', async () => {
     const v = E.key.value.trim();
-    if (v.length > 10 && v.startsWith('sk-or')) {
-      await chrome.storage.local.set({ pc_api_key: v });
-      await fetchModels(v);
+    if (v.length > 10) {
+      const provider = E.provider.value;
+      await chrome.storage.local.set({ pc_provider: provider, pc_api_key: v });
+      await fetchModels(provider, v);
     }
   });
 
@@ -626,7 +660,7 @@
     const text = E.inp.value.trim();
     if (!text) return;
 
-    const { pc_api_key: apiKey, pc_model: model } = await chrome.storage.local.get(['pc_api_key', 'pc_model']);
+    const { pc_provider: provider, pc_api_key: apiKey, pc_model: model } = await chrome.storage.local.get(['pc_provider', 'pc_api_key', 'pc_model']);
     if (!apiKey) { showSetup(); return; }
     if (!model) { showSetup(); return; }
 
@@ -655,7 +689,7 @@
           'Format responses with Markdown (headers, lists, code blocks, tables). Be thorough and helpful.'
         ].join('\n')
       };
-      const resp = await chrome.runtime.sendMessage({ type: 'CHAT', apiKey, model, messages: [sys, ...chatMsg] });
+      const resp = await chrome.runtime.sendMessage({ type: 'CHAT', provider, apiKey, model, messages: [sys, ...chatMsg] });
       remTyping(tid);
       if (resp.success) {
         const aiText = resp.data.choices?.[0]?.message?.content || 'No response';

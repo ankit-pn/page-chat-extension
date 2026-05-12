@@ -1,5 +1,29 @@
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+const PROVIDERS = {
+  openrouter: {
+    chatUrl: 'https://openrouter.ai/api/v1/chat/completions',
+    modelsUrl: 'https://openrouter.ai/api/v1/models',
+    extraHeaders: (key) => ({
+      'Authorization': `Bearer ${key}`,
+      'HTTP-Referer': chrome.runtime.id,
+      'X-Title': 'PageChat AI'
+    }),
+    parseModels: (data) => (data.data || []).map(m => ({
+      id: m.id,
+      name: m.name || m.id,
+      provider: m.id.includes('/') ? m.id.split('/')[0] : 'openrouter'
+    }))
+  },
+  deepseek: {
+    chatUrl: 'https://api.deepseek.com/v1/chat/completions',
+    modelsUrl: 'https://api.deepseek.com/v1/models',
+    extraHeaders: (key) => ({ 'Authorization': `Bearer ${key}` }),
+    parseModels: (data) => (data.data || []).map(m => ({
+      id: m.id,
+      name: m.id,
+      provider: 'deepseek'
+    }))
+  }
+};
 
 let cachedPageContent = null;
 
@@ -58,16 +82,18 @@ async function getPageContent(tabId) {
   return { title: '', url: '', content: '' };
 }
 
-async function callOpenRouter(apiKey, model, messages) {
-  const response = await fetch(OPENROUTER_API_URL, {
+async function callAPI(provider, apiKey, model, messages) {
+  const cfg = PROVIDERS[provider];
+  if (!cfg) throw new Error(`Unknown provider: ${provider}`);
+
+  const body = provider === 'deepseek'
+    ? JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
+    : JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 });
+
+  const response = await fetch(cfg.chatUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': chrome.runtime.id,
-      'X-Title': 'PageChat AI'
-    },
-    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
+    headers: { 'Content-Type': 'application/json', ...cfg.extraHeaders(apiKey) },
+    body
   });
 
   if (!response.ok) {
@@ -78,9 +104,12 @@ async function callOpenRouter(apiKey, model, messages) {
   return response.json();
 }
 
-async function fetchOpenRouterModels(apiKey) {
-  const response = await fetch(OPENROUTER_MODELS_URL, {
-    headers: { 'Authorization': `Bearer ${apiKey}` }
+async function fetchModels(provider, apiKey) {
+  const cfg = PROVIDERS[provider];
+  if (!cfg) throw new Error(`Unknown provider: ${provider}`);
+
+  const response = await fetch(cfg.modelsUrl, {
+    headers: { ...cfg.extraHeaders(apiKey) }
   });
 
   if (!response.ok) {
@@ -89,11 +118,7 @@ async function fetchOpenRouterModels(apiKey) {
   }
 
   const data = await response.json();
-  return (data.data || []).map(m => ({
-    id: m.id,
-    name: m.name || m.id,
-    provider: m.id.includes('/') ? m.id.split('/')[0] : 'openrouter'
-  }));
+  return cfg.parseModels(data);
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -105,8 +130,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CHAT') {
     (async () => {
       try {
-        const { apiKey, model, messages } = msg;
-        const result = await callOpenRouter(apiKey, model, messages);
+        const { provider, apiKey, model, messages } = msg;
+        const result = await callAPI(provider, apiKey, model, messages);
         sendResponse({ success: true, data: result });
       } catch (e) {
         sendResponse({ success: false, error: e.message });
@@ -118,8 +143,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'FETCH_MODELS') {
     (async () => {
       try {
-        const { apiKey } = msg;
-        const models = await fetchOpenRouterModels(apiKey);
+        const { provider, apiKey } = msg;
+        const models = await fetchModels(provider, apiKey);
         sendResponse({ success: true, data: models });
       } catch (e) {
         sendResponse({ success: false, error: e.message });
